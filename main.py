@@ -4,6 +4,7 @@ import urllib3
 
 urllib3.disable_warnings()
 
+
 def get_download_strategy(website: str):
     file_name = None
     with open("map.json", "r") as file:
@@ -16,10 +17,10 @@ def get_download_strategy(website: str):
 
     return download_strategy
 
+
 if __name__ == '__main__':
     country = 'uk'
     website = 'planning.wandsworth.gov.uk'
 
     downloader = get_download_strategy(website)()
     downloader.crawl()
-

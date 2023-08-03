@@ -2,3 +2,6 @@ cert/
 __pycache__/
 pdfs/
 venv/
+logs/
+.idea/
+.vscode/
