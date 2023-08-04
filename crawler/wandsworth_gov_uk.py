@@ -14,6 +14,16 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
         self.downloader = requests.Session()
         self.downloader.verify = False
         self.logger = Logger(self.__class__.__name__).logger
+        self.post_request_headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,'
+                      '*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://planning.wandsworth.gov.uk',
+            'Referer': 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/GeneralSearch.aspx',
+            'Cache-Control': 'max-age=0',
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
 
     def download(self, url, timeout=100, headers=None, cookies=None, data=None) -> str:
         raw_data = None
@@ -52,14 +62,22 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
         application_urls = [f'{base_application_url}{url}' for url in application_urls]
 
         for url in application_urls:
-            application_data = self.download(url)
-            if application_data:
-                application_soup = BeautifulSoup(application_data, 'lxml')
-                application_document_url = self.get_application_href(application_soup, 'a[title="Link to the '
-                                                                                       'application Dates page."]')
-                application_date_href = self.get_application_href(application_soup, 'a[title="Link to View Related '
-                                                                                    'Documents"]')
-                application_date_url = f'{base_application_url}{self.clean_href(application_date_href)}'
+            application_main_data = self.download(url)
+            if application_main_data:
+                application_soup = BeautifulSoup(application_main_data, 'lxml')
+                application_documents_url = self.get_application_href(application_soup, 'a[title="Link to View Related '
+                                                                                        'Documents"]')
+                application_date_href = self.get_application_href(application_soup, 'a[title="Link to the '
+                                                                                    'application Dates page."]')
+                application_dates_url = f'{base_application_url}{self.clean_href(application_date_href)}'
+
+                if application_documents_url:
+                    application_documents_page_data = self.download(application_documents_url)
+                    if application_documents_page_data:
+                        pdf_url = self.get_pdf_url(application_documents_page_data)
+
+                if application_dates_url:
+                    application_dates_data = self.download(application_dates_url)
 
         return application_urls
 
@@ -89,26 +107,16 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
         return viewstate, viewstate_generator, event_validation
 
     def get_first_page_data(self, viewstate: str, viewstate_generator: str, event_validation: str) -> str:
-        general_search_headers = {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,'
-                      '*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Origin': 'https://planning.wandsworth.gov.uk',
-            'Referer': 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/GeneralSearch.aspx',
-            'Cache-Control': 'max-age=0',
-            'Content-Type': 'application/x-www-form-urlencoded',
-        }
         general_search_url = 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/GeneralSearch.aspx'
         current_date_time = datetime.now()
         six_months_ago = current_date_time - timedelta(days=6 * 30)
 
-        default_params = f'__VIEWSTATE={quote_plus(viewstate)}&__VIEWSTATEGENERATOR={quote_plus(viewstate_generator)}' \
+        default_form_data = f'__VIEWSTATE={quote_plus(viewstate)}&__VIEWSTATEGENERATOR={quote_plus(viewstate_generator)}' \
                          f'&__EVENTVALIDATION={quote_plus(event_validation)}' \
                          f'&txtApplicationNumber=&txtApplicantName=&txtAgentName=&cboStreetReferenceNumber=' \
                          f'&txtProposal=&edrDateSelection=&cboWardCode=&cboParishCode=&cboApplicationTypeCode=' \
                          f'&cboDevelopmentTypeCode=&cboStatusCode=&'
-        params = {
+        form_data = {
             'cboSelectDateValue': 'DATE_RECEIVED',
             'cboMonths': '1',
             'cboDays': '1',
@@ -117,8 +125,8 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
             'dateEnd': current_date_time.strftime('%d/%m/%Y'),
             'csbtnSearch': 'Search',
         }
-        complete_params = f'{default_params}&{urlencode(params)}'
-        first_page_data = self.download(general_search_url, headers=general_search_headers, data=complete_params)
+        complete_form_data = f'{default_form_data}&{urlencode(form_data)}'
+        first_page_data = self.download(general_search_url, headers=self.post_request_headers, data=complete_form_data)
 
         return first_page_data
 
@@ -154,15 +162,76 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
     def get_next_url(self, soup) -> str:
         base_document_url = 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/Generic/'
         next_url = None
-        next_url_tag = soup.select_one('a.noborder img[title="Go to next page "]').parent
+        next_url_tag = None
+
+        child_tag = soup.select_one('a.noborder img[title="Go to last page "]')
+        if child_tag:
+            next_url_tag = child_tag.parent
 
         if next_url_tag and next_url_tag.has_attr('href'):
             next_url = f'{base_document_url}{self.clean_href(next_url_tag["href"])}'
 
         return next_url
 
+    def get_pdf_url(self, page_data: str):
+        soup = BeautifulSoup(page_data, 'lxml')
+
+        pdf_url = None
+        viewstate = None
+        viewstate_generator = None
+        event_validation = None
+        event_target = None
+        case_no = None
+
+        viewstate_tag = soup.select_one('input#__VIEWSTATE')
+        viewstate_generator_tag = soup.select_one('input#__VIEWSTATEGENERATOR')
+        event_validation_tag = soup.select_one('input#__EVENTVALIDATION')
+        application_form_tag = soup.select_one('span:contains("Application Form")')
+        case_no_tag = soup.select_one('span#lblCaseNo')
+
+        if not application_form_tag:
+            return pdf_url
+        else:
+            event_target_pattern = r'gvDocs\$ctl\d+\$lnkDShow'
+            event_target_tag = application_form_tag.find_parent('tr').select_one('a')
+            if event_target_tag and event_target_tag.has_attr('href'):
+                event_target_match = re.search(event_target_pattern, event_target_tag['href'])
+                if event_target_match:
+                    event_target = event_target_match.group(0)
+
+        if viewstate_tag and viewstate_tag.has_attr('value'):
+            viewstate = viewstate_tag['value']
+
+        if viewstate_generator_tag and viewstate_generator_tag.has_attr('value'):
+            viewstate_generator = viewstate_generator_tag['value']
+
+        if event_validation_tag and event_validation_tag.has_attr('value'):
+            event_validation = event_validation_tag['value']
+
+        if case_no_tag:
+            case_no = case_no_tag.get_text()
+
+        if event_target:
+            form_data = f'__EVENTTARGET={quote_plus(event_target)}' \
+                        f'&__EVENTARGUMENT=' \
+                        f'&__VIEWSTATE={quote_plus(viewstate)}' \
+                        f'&__VIEWSTATEGENERATOR={quote_plus(viewstate_generator)}' \
+                        f'&__SCROLLPOSITIONX=0&__SCROLLPOSITIONY=0' \
+                        f'&__EVENTVALIDATION={event_validation}'
+
+            page_url = f'https://planning2.wandsworth.gov.uk/planningcase/comments.aspx?case={quote_plus(case_no)}'
+            post_page_data = self.download(page_url, headers=self.post_request_headers, data=form_data)
+            if post_page_data:
+                post_page_soup = BeautifulSoup(post_page_data, 'lxml')
+                pdf_tag = post_page_soup.select_one('a[target="_blank"]')
+
+                if pdf_tag and pdf_tag.has_attr('href'):
+                    pdf_url = pdf_tag['href']
+
+        return pdf_url
+
     @staticmethod
-    def get_application_href(self, soup, bs_selector: str) -> str:
+    def get_application_href(soup, bs_selector: str) -> str:
         application_href = None
         application_tag = soup.select_one(bs_selector)
 
