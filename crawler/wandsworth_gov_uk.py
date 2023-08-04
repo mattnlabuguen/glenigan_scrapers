@@ -1,5 +1,4 @@
 import re
-
 from datetime import datetime, timedelta
 from urllib.parse import urlencode, quote_plus
 
@@ -31,7 +30,6 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
             }
 
         try:
-            response = None
             if not data:
                 response = self.downloader.get(url, timeout=timeout, headers=headers, cookies=cookies)
             else:
@@ -50,9 +48,18 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
         viewstate, viewstate_generator, event_validation = self.get_general_search_data()
         first_page_data: str = self.get_first_page_data(viewstate, viewstate_generator, event_validation)
         application_urls: list = self.get_application_urls(first_page_data)
+        base_application_url = 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/Generic/'
+        application_urls = [f'{base_application_url}{url}' for url in application_urls]
 
-        for application in application_urls:
-            print(application)
+        for url in application_urls:
+            application_data = self.download(url)
+            if application_data:
+                application_soup = BeautifulSoup(application_data, 'lxml')
+                application_document_url = self.get_application_href(application_soup, 'a[title="Link to the '
+                                                                                       'application Dates page."]')
+                application_date_href = self.get_application_href(application_soup, 'a[title="Link to View Related '
+                                                                                    'Documents"]')
+                application_date_url = f'{base_application_url}{self.clean_href(application_date_href)}'
 
         return application_urls
 
@@ -116,19 +123,18 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
         return first_page_data
 
     def get_application_urls(self, first_page_data: str, max_pages: int = 5) -> list:
-        base_document_url = 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/Generic/'
         first_page_soup = BeautifulSoup(first_page_data, 'lxml')
-        application_urls = self.get_search_result_data(first_page_soup, base_document_url)
-        next_url = self.get_next_url(first_page_soup, base_document_url)
+        application_urls = self.get_search_result_data(first_page_soup)
+        next_url = self.get_next_url(first_page_soup)
         current_page = 1
 
         while current_page < max_pages:
             page_data = self.download(next_url)
             if page_data:
                 page_soup = BeautifulSoup(page_data, 'lxml')
-                application_urls.extend(self.get_search_result_data(page_soup, base_document_url))
+                application_urls.extend(self.get_search_result_data(page_soup))
 
-                next_url = self.get_next_url(page_soup, base_document_url)
+                next_url = self.get_next_url(page_soup)
                 if not next_url:
                     break
                 else:
@@ -136,25 +142,35 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
 
         return application_urls
 
-    @staticmethod
-    def get_search_result_data(soup, base_url: str) -> list:
+    def get_search_result_data(self, soup) -> list:
         search_results = []
         page_links = soup.select('td.TableData a.data_text')
 
         for link in page_links:
-            url = f'{base_url}{link["href"].replace(" ", "%20")}'
-            cleaned_url = re.sub(r'\s', '', url)
-            search_results.append(cleaned_url)
+            search_results.append(self.clean_href(link["href"]))
 
         return search_results
 
-    @staticmethod
-    def get_next_url(soup, base_url: str) -> str:
+    def get_next_url(self, soup) -> str:
+        base_document_url = 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/Generic/'
         next_url = None
         next_url_tag = soup.select_one('a.noborder img[title="Go to next page "]').parent
 
         if next_url_tag and next_url_tag.has_attr('href'):
-            next_url = f'{base_url}{next_url_tag["href"].replace(" ", "%20")}'
-            next_url = re.sub(r'\s', '', next_url)
+            next_url = f'{base_document_url}{self.clean_href(next_url_tag["href"])}'
 
         return next_url
+
+    @staticmethod
+    def get_application_href(self, soup, bs_selector: str) -> str:
+        application_href = None
+        application_tag = soup.select_one(bs_selector)
+
+        if application_tag and application_tag.has_attr('href'):
+            application_href = application_tag['href']
+
+        return application_href
+
+    @staticmethod
+    def clean_href(href: str) -> str:
+        return re.sub(r'\s', '', href.replace(" ", "%20"))

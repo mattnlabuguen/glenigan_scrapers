@@ -5,22 +5,22 @@ import urllib3
 urllib3.disable_warnings()
 
 
-def get_download_strategy(website: str):
+def get_crawling_strategy(website_name: str):
     file_name = None
     with open("map.json", "r") as file:
         mapping = json.load(file)
-        file_name = mapping[website]
+        file_name = mapping[website_name]
 
-    module = importlib.import_module(f'download.{file_name}')
-    class_name = f"{''.join([element.capitalize() for element in file_name.split('_')])}DownloadStrategy"
-    download_strategy = getattr(module, class_name)
+    module = importlib.import_module(f'crawler.{file_name}')
+    class_name = f"{''.join([element.capitalize() for element in file_name.split('_')])}CrawlingStrategy"
+    crawling_strategy = getattr(module, class_name)
 
-    return download_strategy
+    return crawling_strategy
 
 
 if __name__ == '__main__':
     country = 'uk'
     website = 'planning.wandsworth.gov.uk'
 
-    downloader = get_download_strategy(website)()
-    downloader.crawl()
+    crawler = get_crawling_strategy(website)()
+    crawler.crawl()
