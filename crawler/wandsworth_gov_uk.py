@@ -46,21 +46,27 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
             else:
                 response = self.downloader.post(url, timeout=timeout, headers=headers, cookies=cookies, data=data)
 
+            response.raise_for_status()
+
             if response:
-                response.raise_for_status()
-                raw_data = response.text
+                if 'application/pdf' in response.headers.get('Content-Type', ''):
+                    raw_data = response.content
+                else:
+                    raw_data = response.text
 
         except Exception as e:
             self.logger.error(f'HTTP Error:{str(e)}')
 
         return raw_data
 
-    def crawl(self):
+    def crawl(self) -> list:
         viewstate, viewstate_generator, event_validation = self.get_general_search_data()
         first_page_data: str = self.get_first_page_data(viewstate, viewstate_generator, event_validation)
         application_urls: list = self.get_application_urls(first_page_data)
         application_urls = [f'{self.base_application_url}{url}' for url in application_urls]
-        application_data_list = self.get_page_data(application_urls)
+        all_page_raw_data_list = self.get_all_page_raw_data(application_urls)
+
+        return all_page_raw_data_list
 
     def get_general_search_data(self) -> tuple:
         wandsworth_base_url = 'https://planning.wandsworth.gov.uk/Northgate/PlanningExplorer/GeneralSearch.aspx'
@@ -143,8 +149,8 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
     def get_next_url(self, soup) -> str:
         next_url = None
         next_url_tag = None
-
-        child_tag = soup.select_one('a.noborder img[title="Go to next page "]')
+        # Change to 'Go to last page' for testing
+        child_tag = soup.select_one('a.noborder img[title="Go to last page "]')
         if child_tag:
             next_url_tag = child_tag.parent
 
@@ -197,9 +203,14 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
                         f'&__VIEWSTATE={quote_plus(viewstate)}' \
                         f'&__VIEWSTATEGENERATOR={quote_plus(viewstate_generator)}' \
                         f'&__SCROLLPOSITIONX=0&__SCROLLPOSITIONY=0' \
-                        f'&__EVENTVALIDATION={event_validation}'
+                        f'&__EVENTVALIDATION={quote_plus(event_validation)}'
 
             page_url = f'https://planning2.wandsworth.gov.uk/planningcase/comments.aspx?case={quote_plus(case_no)}'
+
+            headers = self.post_request_headers
+            headers['Origin'] = 'https://planning2.wandsworth.gov.uk'
+            headers['Referer'] = page_url
+
             post_page_data = self.download(page_url, headers=self.post_request_headers, data=form_data)
             if post_page_data:
                 post_page_soup = BeautifulSoup(post_page_data, 'lxml')
@@ -210,26 +221,47 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
 
         return pdf_url
 
-    def get_page_data(self, application_urls: list):
+    def get_all_page_raw_data(self, application_urls: list):
+        all_page_raw_data = []
         for url in application_urls:
+            application_data = {
+                'main_details_data': None,
+                'dates_data': None,
+                'document_data': None,
+                'source': url
+            }
+            pdf_url = None
+            document_data = None
             application_main_data = self.download(url)
             if application_main_data:
+                application_data['main_details_data'] = application_main_data
                 application_soup = BeautifulSoup(application_main_data, 'lxml')
-                application_documents_url = self.get_application_href(application_soup, 'a[title="Link to View Related '
-                                                                                        'Documents"]')
+
                 application_date_href = self.get_application_href(application_soup, 'a[title="Link to the '
                                                                                     'application Dates page."]')
-                application_dates_url = f'{self.base_application_url}{self.clean_href(application_date_href)}'
 
+                application_dates_url = f'{self.base_application_url}{self.clean_href(application_date_href)}'
+                if application_dates_url:
+                    application_dates_data = self.download(application_dates_url)
+                    if application_dates_data:
+                        application_data['dates_data'] = application_dates_data
+
+                application_documents_url = self.get_application_href(application_soup, 'a[title="Link to View Related '
+                                                                                        'Documents"]')
                 if application_documents_url:
                     application_documents_page_data = self.download(application_documents_url)
                     if application_documents_page_data:
                         pdf_url = self.get_pdf_url(application_documents_page_data)
 
-                if application_dates_url:
-                    application_dates_data = self.download(application_dates_url)
+                    if pdf_url:
+                        document_data = self.download(pdf_url)
 
-        return application_urls
+                    if document_data:
+                        application_data['document_data'] = document_data
+
+            all_page_raw_data.append(application_data)
+
+        return all_page_raw_data
 
     @staticmethod
     def get_application_href(soup, bs_selector: str) -> str:
