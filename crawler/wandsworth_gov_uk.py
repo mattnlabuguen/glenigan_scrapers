@@ -62,7 +62,7 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
     def crawl(self) -> list:
         viewstate, viewstate_generator, event_validation = self.get_general_search_data()
         first_page_data: str = self.get_first_page_data(viewstate, viewstate_generator, event_validation)
-        application_urls: list = self.get_application_urls(first_page_data)
+        application_urls: list = self.get_application_urls(first_page_data, max_pages = 10)
         application_urls = [f'{self.base_application_url}{url}' for url in application_urls]
         all_page_raw_data_list = self.get_all_page_raw_data(application_urls)
 
@@ -150,7 +150,7 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
         next_url = None
         next_url_tag = None
         # Change to 'Go to last page' for testing
-        child_tag = soup.select_one('a.noborder img[title="Go to last page "]')
+        child_tag = soup.select_one('a.noborder img[title="Go to next page "]')
         if child_tag:
             next_url_tag = child_tag.parent
 

@@ -72,7 +72,7 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
             return ' '.join(set([match.group(1) for match in matches]))
 
     def get_table_value(self, soup, column_name: str) -> str:
-        value = Defaults.NOT_FOUND
+        value = Defaults.NOT_FOUND.value
         try:
             pattern = re.compile(f'^' + re.escape(column_name) + '$')
             child_tag = soup.find('span', text=pattern)
@@ -87,7 +87,7 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
 
         except Exception as e:
             self.logger.error(str(e))
-            value = Defaults.EXTRACTION_ERROR
+            value = Defaults.EXTRACTION_ERROR.value
 
         return value
 
@@ -95,7 +95,7 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
         decision_values = (None, None)
         try:
             extracted_value = self.get_table_value(soup, 'Decision')
-            if extracted_value not in [Defaults.NOT_FOUND, Defaults.EXTRACTION_ERROR]:
+            if extracted_value not in [Defaults.NOT_FOUND.value, Defaults.EXTRACTION_ERROR.value]:
                 decision_values = extracted_value.split('&nbsp;')
 
         except Exception as e:
