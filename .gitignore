@@ -5,3 +5,6 @@ venv/
 logs/
 .idea/
 .vscode/
+.output/
+
+output.csv

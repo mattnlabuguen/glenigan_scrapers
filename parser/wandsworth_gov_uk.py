@@ -1,5 +1,5 @@
+import copy
 import io
-import json
 import re
 
 from bs4 import BeautifulSoup
@@ -14,17 +14,20 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
     def __init__(self):
         self.logger = Logger(self.__class__.__name__).logger
         self.data_template = {
-            'council_decision': None, 'application_number': None, 'application_type': None,
-            'site_address': None, 'proposal': None, 'appeal_submitted': None,
-            'appeal_decision': None, 'appeal_date_lodged': None, 'appeal_decision_date': None,
-            'received': None, 'registered': None, 'decision_expiry': None,
-            'easting': None, 'northing': None, 'planning_portal_reference': None
+            'council_decision': Defaults.NOT_FOUND.value, 'application_number': Defaults.NOT_FOUND.value,
+            'application_type': Defaults.NOT_FOUND.value, 'site_address': Defaults.NOT_FOUND.value,
+            'proposal': Defaults.NOT_FOUND.value, 'appeal_submitted': Defaults.NOT_FOUND.value,
+            'appeal_decision': Defaults.NOT_FOUND.value, 'appeal_date_lodged': Defaults.NOT_FOUND.value,
+            'appeal_decision_date': Defaults.NOT_FOUND.value, 'received': Defaults.NOT_FOUND.value,
+            'registered': Defaults.NOT_FOUND.value, 'decision_expiry': Defaults.NOT_FOUND.value,
+            'easting': Defaults.NOT_FOUND.value, 'northing': Defaults.NOT_FOUND.value,
+            'planning_portal_reference': Defaults.NOT_FOUND.value, 'source': None
         }
 
     def parse(self, raw_data_list: list):
         data_list = []
         for raw_data in raw_data_list:
-            data = self.data_template
+            data = copy.deepcopy(self.data_template)
 
             main_details_soup = None
             dates_soup = None
@@ -40,6 +43,9 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
                 document_byte_stream = io.BytesIO(raw_data['document_data'])
                 document = PdfReader(document_byte_stream)
 
+            if 'source' in raw_data and raw_data['source']:
+                data['source'] = raw_data['source']
+
             if main_details_soup:
                 data['council_decision'] = self.get_table_value(main_details_soup, 'Decision')
                 data['application_number'] = self.get_table_value(main_details_soup, 'Application Number')
@@ -49,6 +55,7 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
                 data['appeal_submitted'] = self.get_table_value(main_details_soup, 'Appeal Submitted?')
                 data['appeal_decision'], data['appeal_decision_date'] = self.get_decision_values(main_details_soup)
                 data['appeal_date_lodged'] = self.get_table_value(main_details_soup, 'Appeal Lodged')
+                self.logger.info(f'Parsing through Application Number: {data["application_number"]}')
 
             if dates_soup:
                 data['received'] = self.get_table_value(dates_soup, 'Received?')
@@ -65,17 +72,27 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
         return data_list
 
     def get_pdf_values(self, document, pattern: str) -> str:
-        page_text = ' '.join([page.extract_text() for page in document.pages]).strip()  # Join all pages and their text.
-        page_text = re.sub(r'\s+', ' ', page_text)
-        matches = list(re.finditer(pattern, page_text))
-        if matches:
-            return ' '.join(set([match.group(1) for match in matches]))
+        value = Defaults.NOT_FOUND.value
+        try:
+            page_text = ' '.join([page.extract_text() for page in document.pages]).strip()
+            page_text = re.sub(r'\s+', ' ', page_text)
+
+            matches = list(re.finditer(pattern, page_text))
+            if matches:
+                value = ' '.join(set([match.group(1) for match in matches]))
+
+        except Exception as e:
+            self.logger.error(f'get_pdf_values() error: {str(e)}')
+            value = Defaults.EXTRACTION_ERROR.value
+
+        return value
 
     def get_table_value(self, soup, column_name: str) -> str:
         value = Defaults.NOT_FOUND.value
+        soup_copy = copy.deepcopy(soup)
         try:
             pattern = re.compile(f'^' + re.escape(column_name) + '$')
-            child_tag = soup.find('span', text=pattern)
+            child_tag = soup_copy.find('span', text=pattern)
             if child_tag:
                 parent_tag = child_tag.parent
                 child_tag.decompose()
@@ -86,19 +103,28 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
                     value = tag_text
 
         except Exception as e:
-            self.logger.error(str(e))
+            self.logger.error(f'get_table_values() error: {str(e)}')
             value = Defaults.EXTRACTION_ERROR.value
 
         return value
 
     def get_decision_values(self, soup) -> tuple:
-        decision_values = (None, None)
+        decision_text = Defaults.NOT_FOUND.value
+        decision_date = Defaults.NOT_FOUND.value
+
         try:
             extracted_value = self.get_table_value(soup, 'Decision')
             if extracted_value not in [Defaults.NOT_FOUND.value, Defaults.EXTRACTION_ERROR.value]:
-                decision_values = extracted_value.split('&nbsp;')
+                cleaned_string = re.sub('\s+', ' ', extracted_value)
+                date_pattern = r'\d{2}/\d{2}/\d{4}'
+                date_match = re.search(date_pattern, cleaned_string)
+
+                if date_match:
+                    decision_date = date_match.group()
+
+                decision_text = re.sub(date_pattern, '', cleaned_string).strip()
 
         except Exception as e:
             self.logger.error(str(e))
 
-        return decision_values
+        return decision_text, decision_date

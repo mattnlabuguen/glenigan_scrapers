@@ -1,12 +1,12 @@
 import importlib
 import json
 import urllib3
+import pandas as pd
 
 urllib3.disable_warnings()
 
 
 def get_crawling_strategy(website_name: str):
-    file_name = None
     with open("map.json", "r") as file:
         mapping = json.load(file)
         file_name = mapping[website_name]
@@ -19,7 +19,6 @@ def get_crawling_strategy(website_name: str):
 
 
 def get_parsing_strategy(website_name: str):
-    file_name = None
     with open("map.json", "r") as file:
         mapping = json.load(file)
         file_name = mapping[website_name]
@@ -39,6 +38,11 @@ if __name__ == '__main__':
     parser = get_parsing_strategy(website)()
 
     raw_data_list = crawler.crawl()
-    data = parser.parse(raw_data_list)
+    data_list = parser.parse(raw_data_list)
 
-    print(data)
+    df = pd.DataFrame(data_list)
+    csv_file = 'output/output.csv'
+
+    df.to_csv(csv_file, index=False)
+
+    print(data_list)
