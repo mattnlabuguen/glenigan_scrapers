@@ -7,7 +7,7 @@ from PyPDF2 import PdfReader
 
 from base.parser import ParsingStrategy
 from base.logger import Logger
-from .defaults import Defaults
+from defaults import Defaults
 
 
 class WandsworthGovUkParsingStrategy(ParsingStrategy):
@@ -35,6 +35,15 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
 
             if 'main_details_data' in raw_data and raw_data['main_details_data']:
                 main_details_soup = BeautifulSoup(raw_data['main_details_data'], 'lxml')
+                application_number = None if not main_details_soup \
+                    else self.get_table_value(main_details_soup, 'Application Number')
+
+                # Uncomment for testing specific application numbers
+                # if application_number not in ['2023/2441']:
+                #     self.logger.info(f'Skipping Application Number: {application_number}')
+                #     continue
+
+                self.logger.info(f'Parsing through Application Number: {application_number}')
 
             if 'dates_data' in raw_data and raw_data['dates_data']:
                 dates_soup = BeautifulSoup(raw_data['dates_data'], 'lxml')
@@ -47,15 +56,15 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
                 data['source'] = raw_data['source']
 
             if main_details_soup:
-                data['council_decision'] = self.get_table_value(main_details_soup, 'Decision')
-                data['application_number'] = self.get_table_value(main_details_soup, 'Application Number')
+                data['application_number'] = application_number
+                data['appeal_decision'], data['appeal_decision_date'] = self.get_decision_values(main_details_soup)
+                data['council_decision'] = f"{data['appeal_decision']} {data['appeal_decision_date']}"
+
                 data['application_type'] = self.get_table_value(main_details_soup, 'Application Type')
                 data['site_address'] = self.get_table_value(main_details_soup, 'Site Address')
                 data['proposal'] = self.get_table_value(main_details_soup, 'Proposal')
                 data['appeal_submitted'] = self.get_table_value(main_details_soup, 'Appeal Submitted?')
-                data['appeal_decision'], data['appeal_decision_date'] = self.get_decision_values(main_details_soup)
                 data['appeal_date_lodged'] = self.get_table_value(main_details_soup, 'Appeal Lodged')
-                self.logger.info(f'Parsing through Application Number: {data["application_number"]}')
 
             if dates_soup:
                 data['received'] = self.get_table_value(dates_soup, 'Received?')
@@ -63,15 +72,15 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
                 data['decision_expiry'] = self.get_table_value(dates_soup, 'Decision Expiry')
 
             if document:
-                data['easting'] = self.get_pdf_values(document, r'Easting \(x\) (\d+)Northing')
-                data['northing'] = self.get_pdf_values(document, r"\(y\) (\d+)")
-                data['planning_portal_reference'] = self.get_pdf_values(document, r"(PP-\d{7})")
+                data['easting'] = self.get_document_values(document, r'Easting \(x\) (\d+)Northing')
+                data['northing'] = self.get_document_values(document, r"\(y\) (\d+)")
+                data['planning_portal_reference'] = self.get_document_values(document, r"(PP-\d{7})")
 
             data_list.append(data)
 
         return data_list
 
-    def get_pdf_values(self, document, pattern: str) -> str:
+    def get_document_values(self, document, pattern: str) -> str:
         value = Defaults.NOT_FOUND.value
         try:
             page_text = ' '.join([page.extract_text() for page in document.pages]).strip()
@@ -82,7 +91,7 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
                 value = ' '.join(set([match.group(1) for match in matches]))
 
         except Exception as e:
-            self.logger.error(f'get_pdf_values() error: {str(e)}')
+            self.logger.error(f'get_document_values() error: {str(e)}')
             value = Defaults.EXTRACTION_ERROR.value
 
         return value
@@ -108,14 +117,14 @@ class WandsworthGovUkParsingStrategy(ParsingStrategy):
 
         return value
 
-    def get_decision_values(self, soup) -> tuple:
+    def get_decision_values(self, soup) -> list:
         decision_text = Defaults.NOT_FOUND.value
         decision_date = Defaults.NOT_FOUND.value
 
         try:
             extracted_value = self.get_table_value(soup, 'Decision')
             if extracted_value not in [Defaults.NOT_FOUND.value, Defaults.EXTRACTION_ERROR.value]:
-                cleaned_string = re.sub('\s+', ' ', extracted_value)
+                cleaned_string = re.sub(r'\s+', ' ', extracted_value)
                 date_pattern = r'\d{2}/\d{2}/\d{4}'
                 date_match = re.search(date_pattern, cleaned_string)
 

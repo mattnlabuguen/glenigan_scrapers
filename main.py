@@ -2,6 +2,8 @@ import importlib
 import json
 import urllib3
 import pandas as pd
+import pickle
+import os
 
 urllib3.disable_warnings()
 
@@ -33,13 +35,25 @@ def get_parsing_strategy(website_name: str):
 if __name__ == '__main__':
     country = 'uk'
     website = 'planning.wandsworth.gov.uk'
+    raw_data_file = 'output/raw_data.pkl'
+    use_local_file = True
+    # For testing specific URLs.
+    urls = []
 
     crawler = get_crawling_strategy(website)()
     parser = get_parsing_strategy(website)()
 
-    raw_data_list = crawler.crawl()
-    data_list = parser.parse(raw_data_list)
+    if os.path.exists(raw_data_file) and use_local_file:
+        with open(raw_data_file, "rb") as pickle_file:
+            raw_data_list = pickle.load(pickle_file)
 
+    else:
+        raw_data_list = crawler.crawl(urls)
+        if not urls:
+            with open(raw_data_file, "wb") as pickle_file:
+                pickle.dump(raw_data_list, pickle_file)
+
+    data_list = parser.parse(raw_data_list)
     df = pd.DataFrame(data_list)
     csv_file = 'output/output.csv'
 

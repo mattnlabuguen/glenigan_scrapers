@@ -57,33 +57,72 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
                 response = self.downloader.post(url, timeout=timeout, headers=headers, cookies=cookies, data=data)
 
             if response:
-                if 'application/pdf' in response.headers.get('Content-Type', ''):
-                    raw_data = response.content
-                else:
-                    raw_data = response.text
+                raw_data = response.text
 
         except Exception as e:
             self.logger.error(f'download() error: {str(e)}')
 
         return raw_data
 
-    def crawl(self) -> list:
+    def download_document(self, url, timeout=100, headers=None, cookies=None, data=None):
+        """
+        :param url: The URL to download content from.
+        :param timeout: The timeout for the request in seconds.
+        :param headers: Custom headers to be included in the request.
+        :param cookies: Cookies to be included in the request.
+        :param data: Data to be sent in the request body *(for POST requests)*.
+        :return: Returns downloaded content from the URL *(in bytes or string)*.
+        """
+        raw_data = None
+
+        if not isinstance(headers, dict):
+            headers = {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,'
+                          '*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.wandsworth.gov.uk/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                              'Chrome/115.0.0.0 Safari/537.36',
+            }
+
+        try:
+            if not data:
+                response = self.downloader.get(url, timeout=timeout, headers=headers, cookies=cookies)
+            else:
+                response = self.downloader.post(url, timeout=timeout, headers=headers, cookies=cookies, data=data)
+
+            if response:
+                if 'application/pdf' in response.headers.get('Content-Type', ''):
+                    raw_data = response.content
+
+        except Exception as e:
+            self.logger.error(f'download_document() error: {str(e)}')
+
+        return raw_data
+
+    def crawl(self, urls=None) -> list:
         """
         Crawls through the Wandsworth Planning Application directory and extracts information from all pages needing to
         be extracted.
         :return: Returns a list of dictionaries containing raw data from pages crawled.
         """
-        max_pages = 10
+        max_pages = 240
 
-        self.logger.info('Getting general search data...')
-        viewstate, viewstate_generator, event_validation = self._get_general_search_data()
+        if not urls:
+            self.logger.info('Getting general search data...')
+            viewstate, viewstate_generator, event_validation = self._get_general_search_data()
 
-        self.logger.info('Getting first page data...')
-        first_page_data = self._get_first_page_data(viewstate, viewstate_generator, event_validation)
+            self.logger.info('Getting first page data...')
+            first_page_data = self._get_first_page_data(viewstate, viewstate_generator, event_validation)
 
-        self.logger.info(f'Getting all application URLs until page {max_pages}')
-        application_urls = self._get_application_urls(first_page_data, max_pages=max_pages)
-        application_urls = [f'{self.base_application_url}{url}' for url in application_urls]
+            self.logger.info(f'Getting all application URLs until page {max_pages}')
+            application_urls = self._get_application_urls(first_page_data, max_pages=max_pages)
+            application_urls = [f'{self.base_application_url}{url}' for url in application_urls]
+            self.logger.info(f'Found {len(application_urls)} applications')
+        else:
+            self.logger.info('Testing URLs...')
+            application_urls = urls
 
         self.logger.info('Getting all page data from each application...')
         all_page_raw_data_list = self._get_all_page_raw_data(application_urls)
@@ -116,7 +155,7 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
 
     def _get_first_page_data(self, viewstate: str, viewstate_generator: str, event_validation: str) -> str:
         current_date_time = datetime.now()
-        six_months_ago = current_date_time - timedelta(days=6*30)
+        six_months_ago = current_date_time - timedelta(days=6 * 30)
 
         default_form_data = f'__VIEWSTATE={quote_plus(viewstate)}&__VIEWSTATEGENERATOR={quote_plus(viewstate_generator)}' \
                             f'&__EVENTVALIDATION={quote_plus(event_validation)}' \
@@ -145,6 +184,7 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
         current_page = 1
 
         while current_page < max_pages:
+            self.logger.info(f'On page {current_page}')
             page_data = self.download(next_url)
             if page_data:
                 page_soup = BeautifulSoup(page_data, 'lxml')
@@ -152,6 +192,7 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
 
                 next_url = self._get_next_url(page_soup)
                 if not next_url:
+                    self.logger.info(f'Next page not found')
                     break
                 else:
                     current_page += 1
@@ -202,10 +243,16 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
                 if application_documents_url:
                     application_documents_page_data = self.download(application_documents_url)
                     if application_documents_page_data:
-                        document_url = self._get_document_url(application_documents_page_data)
+                        document_urls = self._get_document_url(application_documents_page_data)
 
-                    if document_url:
-                        document_data = self.download(document_url)
+                    if document_urls and isinstance(document_urls, list):
+                        for document_url in document_urls:
+                            # This is for cases when there are more than one document URLs.
+                            document_data = self.download_document(document_url)
+                            if document_data and isinstance(document_data, bytes):
+                                break
+                    else:
+                        document_data = self.download_document(url)
 
                     if document_data:
                         application_data['document_data'] = document_data
@@ -217,7 +264,7 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
     def _get_document_url(self, page_data: str):
         soup = BeautifulSoup(page_data, 'lxml')
 
-        document_url = None
+        document_urls = None
         viewstate = None
         viewstate_generator = None
         event_validation = None
@@ -232,7 +279,7 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
 
         if not application_form_tag:
             self.logger.info('No document URL for this application.')
-            return document_url
+            return document_urls
         else:
             event_target_pattern = r'gvDocs\$ctl\d+\$lnkDShow'
             event_target_tag = application_form_tag.find_parent('tr').select_one('a')
@@ -270,12 +317,16 @@ class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):
             post_page_data = self.download(page_url, headers=self.post_request_headers, data=form_data)
             if post_page_data:
                 post_page_soup = BeautifulSoup(post_page_data, 'lxml')
-                document_tag = post_page_soup.select_one('a[target="_blank"]')
+                document_tags = post_page_soup.select('a[target="_blank"]')
 
-                if document_tag and document_tag.has_attr('href'):
-                    document_url = document_tag['href']
+                if len(document_tags) > 1:
+                    document_urls = [tag['href'] for tag in document_tags if tag and tag.has_attr('href')]
+                else:
+                    document_tag = document_tags[0]
+                    if document_tag and document_tag.has_attr('href'):
+                        document_urls = document_tag['href']
 
-        return document_url
+        return document_urls
 
     @staticmethod
     def _get_search_result_data(soup) -> list:
