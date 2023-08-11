@@ -7,7 +7,7 @@ from PyPDF2 import PdfReader
 
 from base.parser import ParsingStrategy
 from base.logger import Logger
-from defaults import Defaults
+from parser.defaults import Defaults
 
 
 class WandsworthGovUkParsingStrategy(ParsingStrategy):

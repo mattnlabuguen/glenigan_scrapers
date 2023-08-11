@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from base.crawler import CrawlingStrategy
 from base.downloader import Downloader
 from base.logger import Logger
-from .utils import clean_href, get_application_href
+from crawler.utils import clean_href, get_application_href
 
 
 class WandsworthGovUkCrawlingStrategy(CrawlingStrategy):

@@ -1,5 +1,6 @@
-import logging
 from datetime import datetime
+
+import logging
 
 
 class Logger:
